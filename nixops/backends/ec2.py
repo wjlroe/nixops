@@ -70,6 +70,7 @@ class EC2Definition(MachineDefinition):
         self.dns_hostname = x.find("attr[@name='hostName']/string").get("value")
         self.dns_ttl = x.find("attr[@name='ttl']/int").get("value")
         self.route53_access_key_id = x.find("attr[@name='accessKeyId']/string").get("value")
+        self.route53_use_public_dns_name = x.find("attr[@name='usePublicDNSName']/bool").get("value") == "true"
 
     def show_type(self):
         return "{0} [{1}]".format(self.get_type(), self.region or self.zone or "???")
@@ -963,8 +964,11 @@ class EC2State(MachineState):
         self.dns_hostname = defn.dns_hostname
         self.dns_ttl = defn.dns_ttl
         self.route53_access_key_id = defn.route53_access_key_id
+        self.route53_use_public_dns_name = defn.route53_use_public_dns_name
+        record_type = 'CNAME' if self.route53_use_public_dns_name else 'A'
+        dns_value = self.public_dns_name if self.route53_use_public_dns_name else self.public_ipv4
 
-        self.log('sending Route53 DNS: {0} {1}'.format(self.public_ipv4, self.dns_hostname))
+        self.log('sending Route53 DNS: {0} {1} {2}'.format(self.dns_hostname, record_type, dns_value))
 
         self.connect_route53()
 
