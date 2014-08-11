@@ -86,6 +86,7 @@ class EC2State(MachineState):
     state = nixops.util.attr_property("state", MachineState.MISSING, int)  # override
     public_ipv4 = nixops.util.attr_property("publicIpv4", None)
     private_ipv4 = nixops.util.attr_property("privateIpv4", None)
+    public_dns_name = nixops.util.attr_property("publicDnsName", None)
     elastic_ipv4 = nixops.util.attr_property("ec2.elasticIpv4", None)
     access_key_id = nixops.util.attr_property("ec2.accessKeyId", None)
     region = nixops.util.attr_property("ec2.region", None)
@@ -124,6 +125,7 @@ class EC2State(MachineState):
             self.vm_id = None
             self.public_ipv4 = None
             self.private_ipv4 = None
+            self.public_dns_name = None
             self.elastic_ipv4 = None
             self.region = None
             self.zone = None
@@ -293,6 +295,7 @@ class EC2State(MachineState):
 
         self.private_ipv4 = instance.private_ip_address
         self.public_ipv4 = instance.ip_address
+        self.public_dns_name = instance.public_dns_name
         self.ssh_pinged = False
 
 
@@ -988,22 +991,41 @@ class EC2State(MachineState):
 
         zones = sorted(zones, cmp=lambda a, b: cmp(len(a), len(b)), reverse=True)
         zoneid = zones[0]['Id'].split("/")[2]
+        dns_name = '{0}.'.format(self.dns_hostname)
 
-        # name argument does not filter, just is a starting point, annoying.. copying into a separate list
-        all_prevrrs = self._conn_route53.get_all_rrsets(hosted_zone_id=zoneid, type="A", name="{0}.".format(self.dns_hostname))
-        prevrrs = []
-        for prevrr in all_prevrrs:
-            if prevrr.name == "{0}.".format(self.dns_hostname):
-                prevrrs.append(prevrr)
+        prev_a_rrs = [prev for prev
+                      in self._conn_route53.get_all_rrsets(
+                          hosted_zone_id=zoneid,
+                          type="A",
+                          name=dns_name
+                      )
+                      if prev.name == dns_name
+                      and prev.type == "A"]
+        self.log("Removing the following A records: {0}".format(prev_a_rrs))
+        prev_cname_rrs = [prev for prev
+                          in self._conn_route53.get_all_rrsets(
+                              hosted_zone_id=zoneid,
+                              type="CNAME",
+                              name=dns_name
+                          )
+                          if prev.name == dns_name
+                          and prev.type == "CNAME"]
+
+
+        self.log("Removing the following CNAME records: {0}".format(prev_cname_rrs))
 
         changes = boto.route53.record.ResourceRecordSets(connection=self._conn_route53, hosted_zone_id=zoneid)
-        if len(prevrrs) > 0:
-            for prevrr in prevrrs:
+        if len(prev_a_rrs) > 0:
+            for prevrr in prev_a_rrs:
                 change = changes.add_change("DELETE", self.dns_hostname, "A")
                 change.add_value(",".join(prevrr.resource_records))
+        if len(prev_cname_rrs) > 0:
+            for prevrr in prev_cname_rrs:
+                change = changes.add_change("DELETE", self.dns_hostname, "CNAME")
+                change.add_value(",".join(prevrr.resource_records))
 
-        change = changes.add_change("CREATE", self.dns_hostname, "A")
-        change.add_value(self.public_ipv4)
+        change = changes.add_change("CREATE", self.dns_hostname, record_type)
+        change.add_value(dns_value)
         self._commit_route53_changes(changes)
 
 
